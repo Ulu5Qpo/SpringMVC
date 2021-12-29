@@ -1,0 +1,521 @@
+from __future__ import absolute_import, division, print_function
+from PaddleClass.ppcls.arch.backbone.base.theseus_layer import TheseusLayer
+from PaddleClass.ppcls.utils.save_load import load_dygraph_pretrain, load_dygraph_pretrain_from_url
+import numpy as np
+import paddle
+from paddle import ParamAttr
+import paddle.nn as nn
+import paddle.nn.functional as F
+from paddle.nn import Conv2D, BatchNorm, Linear, Dropout
+from paddle.nn import AdaptiveAvgPool2D, MaxPool2D, AvgPool2D
+from paddle.nn.initializer import Uniform
+
+import math
+
+from ppcls.utils.save_load import load_dygraph_pretrain, load_dygraph_pretrain_from_url
+class SELayer(nn.Layer):
+    def __init__(self, num_channels,reduction_ratio=16):
+        super(SELayer, self).__init__()
+
+        self.avg_pool = AdaptiveAvgPool2D(1)
+        self.fc=nn.Sequential(
+            nn.Linear(num_channels,num_channels//reduction_ratio),
+            nn.ReLU(),
+            nn.Linear(num_channels//reduction_ratio,num_channels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, input):
+        s=paddle.shape(input)
+        y=paddle.reshape(self.avg_pool(input),[s[0],s[1]])
+        y=paddle.reshape(self.fc(y),[s[0],s[1],1,1])
+        return input*y
+
+class MyVGG(paddle.nn.Layer):
+    ''' MyVGG16'''
+    def __init__(self):
+        super(MyVGG,self).__init__()
+        self.conv1 = nn.Conv2D(in_channels=3, out_channels=64, kernel_size=3, padding=1)
+        self.se1=SELayer(64,2)
+        self.bn1=nn.BatchNorm2D(64)
+        self.relu1 = paddle.nn.ReLU()
+        self.conv2 = nn.Conv2D(in_channels=64, out_channels=64, kernel_size=3, padding=1)
+        self.se2=SELayer(64,2)
+        self.bn2=nn.BatchNorm2D(64)
+        self.relu2 = paddle.nn.ReLU()
+        self.pool1 = nn.MaxPool2D(kernel_size =2, stride =2)
+
+        self.conv3 = nn.Conv2D(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+        self.se3=SELayer(128,2)
+        self.bn3=nn.BatchNorm2D(128)
+        self.relu3 = paddle.nn.ReLU()
+        self.conv4 = nn.Conv2D(in_channels=128, out_channels=128, kernel_size=3, padding=1)
+        self.se4=SELayer(128,2)
+        self.bn4=nn.BatchNorm2D(128)
+        self.relu4 = paddle.nn.ReLU()
+        self.pool2 = nn.MaxPool2D(kernel_size =2, stride =2)
+
+        self.conv5 = nn.Conv2D(in_channels=128, out_channels=256, kernel_size=3, padding=1)
+        self.se5=SELayer(256,2)
+        self.bn5=nn.BatchNorm2D(256)
+        self.relu5 = paddle.nn.ReLU()
+        self.conv6 = nn.Conv2D(in_channels=256, out_channels=256, kernel_size=3, padding=1)
+        self.se6=SELayer(256,2)
+        self.bn6=nn.BatchNorm2D(256)
+        self.relu6 = paddle.nn.ReLU()
+        self.conv7 = nn.Conv2D(in_channels=256, out_channels=256, kernel_size=3, padding=1)
+        self.se7=SELayer(256,2)
+        self.bn7=nn.BatchNorm2D(256)
+        self.relu7 = paddle.nn.ReLU()
+        self.pool3 = nn.MaxPool2D(kernel_size =2, stride =2)
+
+        self.conv8 = nn.Conv2D(in_channels=256, out_channels=512, kernel_size=3, padding=1)
+        self.se8=SELayer(512,2)
+        self.bn8=nn.BatchNorm2D(512)
+        self.relu8 = paddle.nn.ReLU()
+        self.conv9 = nn.Conv2D(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.se9=SELayer(512,2)
+        self.bn9=nn.BatchNorm2D(512)
+        self.relu9 = paddle.nn.ReLU()
+        self.conv10 = nn.Conv2D(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.se10=SELayer(512,2)
+        self.bn10=nn.BatchNorm2D(512)
+        self.relu10 = paddle.nn.ReLU()
+        self.pool4 = nn.MaxPool2D(kernel_size =2, stride =2)
+
+
+        self.conv11 = nn.Conv2D(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.se11=SELayer(512,2)
+        self.bn11=nn.BatchNorm2D(512)
+        self.relu11 = paddle.nn.ReLU()
+        self.conv12 = nn.Conv2D(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.se12=SELayer(512,2)
+        self.bn12=nn.BatchNorm2D(512)
+        self.relu12 = paddle.nn.ReLU()
+        self.conv13 = nn.Conv2D(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.se13=SELayer(512,2)
+        self.bn13=nn.BatchNorm2D(512)
+        self.relu13 = paddle.nn.ReLU()
+        self.pool5 = nn.MaxPool2D(kernel_size =2, stride =2)
+
+        self.fc1 = nn.Linear(in_features=512*7*7, out_features=4096)
+        self.relu14 = paddle.nn.ReLU()
+        self.fc2 = nn.Linear(in_features=4096, out_features=4096)
+        self.relu15 = paddle.nn.ReLU()
+        self.fc3 = nn.Linear(in_features=4096, out_features=12)
+        self.softmax=nn.Softmax()
+
+    def forward(self,input, check_shape=False, check_content=False):
+        conv1out = self.conv1(input)
+        se1out=self.se1(conv1out)
+        bn1out=self.bn1(se1out)
+        relu1out=self.relu1(bn1out)
+        conv2out = self.conv2(relu1out)
+        se2out=self.se2(conv2out)        
+        bn2out=self.bn2(se2out)
+        relu2out=self.relu2(bn2out)
+        pool1out = self.pool1(relu2out)
+
+        conv3out = self.conv3(pool1out)
+        se3out=self.se3(conv3out)        
+        bn3out=self.bn3(se3out)
+        relu3out=self.relu3(bn3out)
+        conv4out = self.conv4(relu3out)
+        se4out=self.se4(conv4out)        
+        bn4out=self.bn4(se4out)
+        relu4out=self.relu4(bn4out)
+        pool2out = self.pool2(relu4out)
+
+        conv5out = self.conv5(pool2out)
+        se5out=self.se5(conv5out)        
+        bn5out=self.bn5(se5out)
+        relu5out=self.relu5(bn5out)
+        conv6out = self.conv6(relu5out)
+        se6out=self.se6(conv6out)     
+        bn6out=self.bn6(se6out)
+        relu6out=self.relu6(bn6out)
+        conv7out = self.conv7(relu6out)
+        se7out=self.se7(conv7out)     
+        bn7out=self.bn7(se7out)
+        relu7out=self.relu7(bn7out)
+        pool3out = self.pool3(relu7out)
+
+        conv8out = self.conv8(pool3out)
+        se8out=self.se8(conv8out)     
+        bn8out=self.bn8(se8out)
+        relu8out=self.relu8(bn8out)
+        conv9out = self.conv9(relu8out)
+        se9out=self.se9(conv9out)     
+        bn9out=self.bn9(se9out)
+        relu9out=self.relu9(bn9out)
+        conv10out = self.conv10(relu9out)
+        se10out=self.se10(conv10out)     
+        bn10out=self.bn10(se10out)
+        relu10out=self.relu10(bn10out)
+        pool4out = self.pool4(relu10out)
+
+        conv11out = self.conv11(pool4out)
+        se11out=self.se11(conv11out)     
+        bn11out=self.bn11(se11out)
+        relu11out=self.relu11(bn11out)
+        conv12out = self.conv12(relu11out)
+        se12out=self.se12(conv12out)     
+        bn12out=self.bn12(se12out)
+        relu12out=self.relu12(bn12out)
+        conv13out = self.conv13(relu12out)
+        se13out=self.se13(conv13out)     
+        bn13out=self.bn13(se13out)
+        relu13out=self.relu13(bn13out)
+        pool5out = self.pool5(relu13out)
+
+        x = fluid.layers.reshape(pool5out, [pool5out.shape[0], -1])
+        fc1out = self.fc1(x)
+        relu14out=self.relu14(fc1out)
+        fc2out = self.fc2(relu14out)
+        relu15out=self.relu15(fc2out)
+        fc3out=self.fc3(relu15out)
+        softmaxout=self.softmax(fc3out)
+
+        if check_shape==True:
+            print("conv1out: {}".format(conv1out.shape))
+            print("conv2out: {}".format(conv2out.shape))
+            print("conv3out: {}".format(conv3out.shape))
+            print("conv4out: {}".format(conv4out.shape))
+            print("conv5out: {}".format(conv5out.shape))
+            print("conv6out: {}".format(conv6out.shape))
+            print("conv7out: {}".format(conv7out.shape))
+            print("conv8out: {}".format(conv8out.shape))
+            print("conv9out: {}".format(conv9out.shape))
+            print("conv10out: {}".format(conv10out.shape))
+            print("conv11out: {}".format(conv11out.shape))
+            print("conv12out: {}".format(conv12out.shape))
+            print("conv13out: {}".format(conv13out.shape))
+        
+        if check_content==True:
+            print("conv1 params -- kernel weights:", self.conv1.weight[0][0])
+            print("conv2 params -- kernel weights:", self.conv2.weight[0][0])
+            print("conv3 params -- kernel weights:", self.conv3.weight[0][0])
+            print("conv4 params -- kernel weights:", self.conv4.weight[0][0])
+            print("conv5 params -- kernel weights:", self.conv5.weight)
+            idx1 = np.random.randint(0, conv1out.shape[1])
+            idx2 = np.random.randint(0, conv2out.shape[1])
+            print("\nThe {}th channel of conv1 layer: ".format(idx1), conv1out[0][idx1])
+            print("The {}th channel of conv2 layer: ".format(idx2), conv2out[0][idx2])
+            print("The output of last layer:", fc3out[0], '\n')
+
+
+        return softmaxout
+
+
+
+
+
+
+
+
+import os
+import random
+from PIL import Image
+import zipfile
+import json
+import cv2
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+import paddle
+import paddle.nn as nn
+import paddle.nn.functional as F
+
+from paddle.vision import transforms as T
+from multiprocessing import cpu_count
+from paddle.io import Dataset
+from paddle import fluid
+from paddle.fluid.dygraph.nn import \
+                   Conv2D, Linear, \
+                   Embedding, Pool2D, \
+                   BatchNorm
+
+train_parameters = {
+    "input_size": [3, 224, 224],                     # 输入图片的shape
+    "class_dim": 12,                                 # 分类数
+    "src_path":"data/data10954/cat_12_train.zip",   # 原始数据集路径
+    "src_test_path":"data/data10954/cat_12_test.zip",   # 原始数据集路径
+    "target_path":"/home/aistudio/data/dataset",     # 要解压的路径 
+    "train_list_path": "./train.txt",                # train_data.txt路径
+    "eval_list_path": "./eval.txt",                  # eval_data.txt路径
+    "label_dict":{},                                 # 标签字典
+    "readme_path": "/home/aistudio/data/readme.json",# readme.json路径
+    "num_epochs":1000,                                 # 训练轮数
+    "train_batch_size": 1024,                          # 批次的大小
+    "learning_strategy": {                           # 优化函数相关的配置
+        "lr": 0.0005                                  # 超参数学习率
+    } 
+}
+
+
+#划分数据集
+def get_data_list(target_path,train_list_path,eval_list_path):
+    '''
+    生成数据列表
+    '''
+    #统计每个类别图片数量
+    cat_class_num = np.zeros(12)
+    # 存储要写进eval.txt和train.txt中的内容
+    trainer_list=[]
+    eval_list=[]
+    with open(target_path, "r") as f:
+        data = f.readlines()
+        for idxitem, imgpath in enumerate(data):
+            fname, catnum = str.split(imgpath,'\t')
+            catnum = int(catnum)
+            cat_class_num[catnum] += 1
+            if cat_class_num[catnum] % 10 == 0:
+                eval_list.append('data_sets/cat_12/'+ imgpath)
+            else:
+                trainer_list.append('data_sets/cat_12/' + imgpath)
+    
+    print('now  show nums of 12 classes')
+    for i in range(12):
+        print(cat_class_num[i])
+    
+    print('train_len is %d',len(trainer_list))
+    print('eval_len is %d',len(eval_list))
+
+
+    #乱序  
+    random.shuffle(eval_list)
+    with open(eval_list_path, 'a') as f:
+        for eval_image in eval_list:
+            f.write(eval_image) 
+    #乱序        
+    random.shuffle(trainer_list) 
+    with open(train_list_path, 'a') as f2:
+        for train_image in trainer_list:
+            f2.write(train_image) 
+ 
+    print ('生成数据列表完成！')
+
+
+src_path=train_parameters['src_path']
+target_path=train_parameters['target_path']
+train_list_path=train_parameters['train_list_path']
+eval_list_path=train_parameters['eval_list_path']
+batch_size=train_parameters['train_batch_size']
+
+#每次生成数据列表前，首先清空train.txt和eval.txt
+with open(train_list_path, 'w') as f: 
+    f.seek(0)
+    f.truncate() 
+with open(eval_list_path, 'w') as f: 
+    f.seek(0)
+    f.truncate() 
+    
+#生成数据列表   
+get_data_list("data_sets/cat_12/train_list.txt",train_list_path,eval_list_path)
+
+
+train_transforms = T.Compose([T.Resize((256,256)), 
+                        T.CenterCrop(224), 
+                        T.RandomHorizontalFlip(0.5),
+                        T.RandomRotation(15),
+                        T.Transpose(),
+                        T.Normalize(mean=255, data_format='CHW', to_rgb=True),
+                        T.Normalize(mean=[0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225])])
+
+eval_transforms = T.Compose([T.Resize((256,256)), 
+                        T.CenterCrop(224), 
+                        T.Transpose(),
+                        T.Normalize(mean=255, data_format='CHW', to_rgb=True),
+                        T.Normalize(mean=[0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225])])
+
+class Reader(Dataset):
+    def __init__(self, data_path, mode='train'):
+        """
+        数据读取器
+        :param data_path: 数据集所在路径
+        :param mode: train or eval
+        """
+        super().__init__()
+        self.data_path = data_path
+        self.img_paths = []
+        self.labels = []
+        self.mode=mode
+        self.train_transforms=train_transforms
+        self.eval_transforms=eval_transforms
+
+        if mode == 'train':
+            with open(os.path.join(self.data_path, "train.txt"), "r", encoding="utf-8") as f:
+                self.info = f.readlines()
+            for img_info in self.info:
+                img_path, label = img_info.strip().split('\t')
+                self.img_paths.append(img_path)
+                self.labels.append(int(label))
+
+        else:
+            with open(os.path.join(self.data_path, "eval.txt"), "r", encoding="utf-8") as f:
+                self.info = f.readlines()
+            for img_info in self.info:
+                img_path, label = img_info.strip().split('\t')
+                self.img_paths.append(img_path)
+                self.labels.append(int(label))
+
+        
+
+
+    def __getitem__(self, index):
+        """
+        获取一组数据
+        :param index: 文件索引号
+        :return:
+        """
+        # 第一步打开图像文件并获取label值
+        img_path = self.img_paths[index]
+        img = Image.open(img_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB') 
+        if self.mode=='train':
+            img=self.train_transforms(img)
+        else:
+            img=self.eval_transforms(img)
+        # img = img.resize((224, 224), Image.BILINEAR)
+        # img = np.array(img).astype('float32')
+        # img = img.transpose((2, 0, 1)) / 255
+        label = self.labels[index]
+        label = np.array([label], dtype="int64")
+
+        return img,label
+
+    def print_sample(self, index: int = 0):
+        print("文件名", self.img_paths[index], "\t标签值", self.labels[index])
+
+    def __len__(self):
+        return len(self.img_paths)
+
+    #训练数据加载
+train_dataset = Reader('/home/aistudio/',mode='train')
+train_loader = paddle.io.DataLoader(train_dataset, batch_size=64, shuffle=True)
+#测试数据加载
+eval_dataset = Reader('/home/aistudio/',mode='eval')
+eval_loader = paddle.io.DataLoader(eval_dataset, batch_size = 8, shuffle=False)
+
+train_dataset.print_sample(200)
+print(train_dataset.__len__())
+eval_dataset.print_sample(0)
+print(eval_dataset.__len__())
+print(eval_dataset.__getitem__(10)[0].shape)
+print(eval_dataset.__getitem__(10)[1].shape)
+
+Batch=0
+Batchs=[]
+all_train_accs=[]
+def draw_train_acc(Batchs, train_accs):
+    title="training accs"
+    plt.title(title, fontsize=24)
+    plt.xlabel("batch", fontsize=14)
+    plt.ylabel("acc", fontsize=14)
+    plt.plot(Batchs, train_accs, color='green', label='training accs')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+all_train_loss=[]
+def draw_train_loss(Batchs, train_loss):
+    title="training loss"
+    plt.title(title, fontsize=24)
+    plt.xlabel("batch", fontsize=14)
+    plt.ylabel("loss", fontsize=14)
+    plt.plot(Batchs, train_loss, color='red', label='training loss')
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+use_gpu = True
+place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
+with fluid.dygraph.guard(place):
+    # model=MyMLP() # 模型实例化
+    model=MyVGG()
+    # model= SEVGGNet()
+    # model=paddle.vision.models.resnet18(pretrained=True,with_pool=True,num_classes=12)
+    # model=paddle.vision.models.vgg16(num_classes=12)
+    paddle.set_device('gpu:0') if use_gpu else paddle.set_device('cpu')
+    model.train() # 训练模式
+    cross_entropy = paddle.nn.CrossEntropyLoss()
+    # opt=paddle.optimizer.SGD(learning_rate=0.01, parameters=model.parameters())
+    opt=paddle.optimizer.Adam(learning_rate=0.0001, parameters=model.parameters())
+    # opt=paddle.optimizer.Momentum(learning_rate=0.001,parameters=model.parameters())
+
+
+    epochs_num=train_parameters['num_epochs'] #迭代次数
+    for pass_num in range(train_parameters['num_epochs']):
+        for batch_id,data in enumerate(train_loader()):
+            image = data[0]
+            label = data[1]
+            image = paddle.to_tensor(image)
+            label = paddle.to_tensor(label)
+            # if pass_num % 25 ==0 and batch_id==0:
+            #     predict=model(image,check_content=True,check_shape=True) #数据传入model
+            # else:
+            #     predict=model(image) #数据传入model
+            predict=model(image)
+            loss=cross_entropy(predict,label)
+            acc=paddle.metric.accuracy(predict,label)#计算精度
+            if batch_id!=0 and batch_id%5==0:
+                Batch = Batch+5 
+                Batchs.append(Batch)
+                all_train_loss.append(loss.numpy()[0])
+                all_train_accs.append(acc.numpy()[0]) 
+                print("epoch:{},step:{},train_loss:{},train_acc:{}".format(pass_num,batch_id,loss.numpy(),acc.numpy()))        
+            loss.backward()       
+            opt.step()
+            opt.clear_grad()   #opt.clear_grad()来重置梯度
+        if pass_num %50==0:
+            paddle.save(model.state_dict(),'SEVGG{}'.format(pass_num))#保存模型
+
+    paddle.save(model.state_dict(),'SEVGG')#保存模型
+    draw_train_acc(Batchs,all_train_accs)
+    draw_train_loss(Batchs,all_train_loss)
+
+import os
+import random
+from PIL import Image
+import zipfile
+import json
+import cv2
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+import paddle
+import paddle.nn.functional as F
+import pandas as pd
+
+from paddle.vision import transforms as T
+from multiprocessing import cpu_count
+from paddle.io import Dataset
+from paddle import fluid
+from paddle.fluid.dygraph.nn import \
+                   Conv2D, Linear, \
+                   Embedding, Pool2D, \
+                   BatchNorm
+
+use_gpu = True
+place = fluid.CUDAPlace(0) if use_gpu else fluid.CPUPlace()
+with fluid.dygraph.guard(place):
+    # para_state_dict = paddle.load("SEVGG-10") 
+    model = MyVGG()
+    # model = MyCNN()
+    # model=MyMLP()
+    use_gpu = True
+    paddle.set_device('gpu:0') if use_gpu else paddle.set_device('cpu')
+    model.set_state_dict(para_state_dict) #加载模型参数
+    model.eval() #验证模式
+
+    accs = []
+
+    for batch_id,data in enumerate(eval_loader()):#测试集
+        image=data[0]
+        label=data[1]     
+        predict=model(image)       
+        acc=paddle.metric.accuracy(predict,label)
+        accs.append(acc.numpy()[0])
+        avg_acc = np.mean(accs)
+    print("当前模型在验证集上的准确率为:",avg_acc)
